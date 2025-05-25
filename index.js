@@ -258,12 +258,14 @@ async function main() {
         await updateWalletData();
 
         // Ambil gas price normal sekali saja
-        logger.progress(`[${timestamp()}] Mengambil Gas Price...`);
-        const feeData = await provider.getFeeData();
-        selectedGasPrice = feeData.gasPrice;
-        if (!selectedGasPrice) throw new Error("Gagal mengambil gas price.");
-        logger.info(`[${timestamp()}] Gas Price ditetapkan: ${ethers.formatUnits(selectedGasPrice, "gwei")} Gwei`);
+        // Ambil gas price TAPI KITA PAKSA NILAI LEBIH TINGGI UNTUK TES
+        logger.progress(`[${timestamp()}] Menetapkan Gas Price (Manual)...`);
+        
+        // !! KITA PAKSA GUNAKAN 5 GWEI UNTUK TES !!
+        selectedGasPrice = ethers.parseUnits("5", "gwei"); 
 
+        if (!selectedGasPrice) throw new Error("Gagal menetapkan gas price.");
+        logger.info(`[${timestamp()}] Gas Price ditetapkan (Manual): ${ethers.formatUnits(selectedGasPrice, "gwei")} Gwei`);
         // Jalankan sequence USDT & ETH
         await runSwapSequence("USDT & ETH", "usdtToEth", "ethToUsdt", SWAPS_PER_PAIR, USDT_SWAP_AMOUNT, ETH_SWAP_AMOUNT, USDT_ADDRESS, ETH_ADDRESS);
         await updateWalletData(); // Update saldo setelah sequence 1
