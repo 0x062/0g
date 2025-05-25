@@ -1,0 +1,25 @@
+{
+  "name": "0g-auto-swap-bot",
+  "version": "1.0.0",
+  "description": "Bot otomatis untuk melakukan swap token di jaringan 0G Labs (versi konsol).",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "0g",
+    "blockchain",
+    "ethers",
+    "swap",
+    "bot"
+  ],
+  "author": "haha",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "ethers": "^6.12.1",
+    "moment-timezone": "^0.5.45"
+  }
+}
