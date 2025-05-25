@@ -1,9 +1,6 @@
 import "dotenv/config";
 import { ethers } from "ethers";
 
-// =========================================================================
-// KONFIGURASI & KONSTANTA
-// =========================================================================
 const RPC_URL = process.env.RPC_URL;
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const ROUTER_ADDRESS = process.env.ROUTER_ADDRESS;
@@ -14,9 +11,6 @@ const NETWORK_NAME = process.env.NETWORK_NAME || "0G Newton Testnet";
 const APPROVAL_GAS_LIMIT = 100000;
 const SWAP_GAS_LIMIT = 150000;
 
-// =========================================================================
-// SETUP ETHERS & WALLET
-// =========================================================================
 if (!RPC_URL || !PRIVATE_KEY || !ROUTER_ADDRESS || !USDT_ADDRESS || !ETH_ADDRESS || !BTC_ADDRESS) {
     console.error("❌ Error: Pastikan semua variabel .env (RPC_URL, PRIVATE_KEY, ROUTER_ADDRESS, USDT_ADDRESS, ETH_ADDRESS, BTC_ADDRESS) sudah diisi.");
     process.exit(1);
@@ -24,9 +18,6 @@ if (!RPC_URL || !PRIVATE_KEY || !ROUTER_ADDRESS || !USDT_ADDRESS || !ETH_ADDRESS
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// =========================================================================
-// LOGGER SEDERHANA
-// =========================================================================
 const colors = { reset: "\x1b[0m", green: "\x1b[32m", yellow: "\x1b[33m", red: "\x1b[31m", cyan: "\x1b[36m", white: "\x1b[37m" };
 const logger = {
     info: (msg) => console.log(`${colors.green}[✓] ${msg}${colors.reset}`),
@@ -36,9 +27,6 @@ const logger = {
     step: (msg) => console.log(`\n${colors.white}--- ${msg} ---${colors.reset}`),
 };
 
-// =========================================================================
-// ABIs (Disederhanakan + Router)
-// =========================================================================
 const ERC20_ABI = [
     { name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "_spender", type: "address" }, { name: "_value", type: "uint256" }], outputs: [{ name: "", type: "bool" }] },
     { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "_owner", type: "address" }], outputs: [{ name: "balance", type: "uint256" }] },
@@ -48,9 +36,6 @@ const ROUTER_ABI = [
     { inputs: [{ components: [ { internalType: "address", name: "tokenIn", type: "address" }, { internalType: "address", name: "tokenOut", type: "address" }, { internalType: "uint24", name: "fee", type: "uint24" }, { internalType: "address", name: "recipient", type: "address" }, { internalType: "uint256", name: "deadline", type: "uint256" }, { internalType: "uint256", name: "amountIn", type: "uint256" }, { internalType: "uint256", name: "amountOutMinimum", type: "uint256" }, { internalType: "uint160", name: "sqrtPriceLimitX96", type: "uint160" }, ], internalType: "struct ISwapRouter.ExactInputSingleParams", name: "params", type: "tuple", }, ], name: "exactInputSingle", outputs: [{ internalType: "uint256", name: "amountOut", type: "uint256" }], stateMutability: "payable", type: "function", },
 ];
 
-// =========================================================================
-// STATE & UTILITIES
-// =========================================================================
 let transactionQueue = Promise.resolve();
 let nextNonce = null;
 let selectedGasOptions = {};
@@ -59,10 +44,7 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const shortHash = (hash) => `${hash.substring(0, 6)}...${hash.substring(hash.length - 4)}`;
 const timestamp = () => new Date().toLocaleTimeString('en-GB', { hour12: false });
 
-// =========================================================================
-// FUNGSI INTI
-// =========================================================================
-async function updateWalletData() {
+async function updateWalletData(logFull = true) {
     try {
         const walletAddress = wallet.address;
         const balanceNative = await provider.getBalance(walletAddress);
@@ -73,13 +55,17 @@ async function updateWalletData() {
         const btcContract = new ethers.Contract(BTC_ADDRESS, ERC20_ABI, provider);
         const balanceBTC = await btcContract.balanceOf(walletAddress);
 
-        logger.info(`[${timestamp()}] Wallet: ${walletAddress}`);
-        logger.info(`  AOGI : ${parseFloat(ethers.formatEther(balanceNative)).toFixed(4)}`);
-        logger.info(`  ETH  : ${parseFloat(ethers.formatEther(balanceETH)).toFixed(4)}`);
-        logger.info(`  USDT : ${parseFloat(ethers.formatUnits(balanceUSDT, 18)).toFixed(4)}`);
-        logger.info(`  BTC  : ${parseFloat(ethers.formatUnits(balanceBTC, 18)).toFixed(4)}`);
+        if (logFull) {
+            logger.info(`[${timestamp()}] Wallet: ${walletAddress}`);
+            logger.info(`  AOGI : ${parseFloat(ethers.formatEther(balanceNative)).toFixed(4)}`);
+            logger.info(`  ETH  : ${parseFloat(ethers.formatEther(balanceETH)).toFixed(4)}`);
+            logger.info(`  USDT : ${parseFloat(ethers.formatUnits(balanceUSDT, 18)).toFixed(4)}`);
+            logger.info(`  BTC  : ${parseFloat(ethers.formatUnits(balanceBTC, 18)).toFixed(4)}`);
+        }
+        return { balanceNative, balanceUSDT, balanceETH, balanceBTC };
     } catch (error) {
         logger.error(`[${timestamp()}] Gagal mengambil data wallet: ${error.message}`);
+        return null;
     }
 }
 
@@ -161,10 +147,6 @@ function addTransactionToQueue(transactionFunction, description) {
             if (success) {
                 nextNonce++;
             } else {
-                // Jika transaksi (approve atau swap) gagal, kita mungkin ingin mereset nonce
-                // agar diambil ulang, atau membiarkannya untuk coba lagi nonce yang sama
-                // pada item antrean berikutnya jika errornya bukan karena nonce (misal, revert).
-                // Untuk sekarang, reset jika gagal agar fresh.
                 logger.warn(`[${timestamp()}] Transaksi "${description}" gagal, nonce akan di-refresh untuk tugas berikutnya.`);
                 nextNonce = null;
             }
@@ -182,131 +164,185 @@ function addTransactionToQueue(transactionFunction, description) {
     return transactionQueue;
 }
 
-async function runSwapSequence(pairName, directionA, directionB, totalSwaps, amountA, amountB, tokenAAddr, tokenBAddr) {
-    logger.step(`Memulai Sequence Swap ${pairName} (${totalSwaps}x)`);
-    let successCount = 0;
-    let failureCount = 0;
+async function runSwapCycle(
+    pairName,
+    tokenA_Address, tokenA_Name, amountToSwap_A_Fixed,
+    tokenB_Address, tokenB_Name,
+    cycleNumber, totalCycles
+) {
+    logger.info(`[${timestamp()}] [${pairName}] Siklus ke-${cycleNumber}/${totalCycles}`);
+    let cycleFullySuccessful = false;
 
-    for (let i = 1; i <= totalSwaps; i++) {
-        const direction = (i % 2 === 1) ? directionA : directionB;
-        const amount = (i % 2 === 1) ? amountA : amountB;
-        const tokenAddr = (i % 2 === 1) ? tokenAAddr : tokenBAddr; 
-        const tokenInName = direction.split("To")[0].toUpperCase();
+    const tokenAContract = new ethers.Contract(tokenA_Address, ERC20_ABI, provider);
+    let currentBalanceA = await tokenAContract.balanceOf(wallet.address);
 
-        logger.info(`[${timestamp()}] [${pairName}] Swap ke-${i}/${totalSwaps} | Arah: ${direction}`);
-        
-        const tokenInContractForBalance = new ethers.Contract(tokenAddr, ERC20_ABI, provider);
-        const currentBalance = await tokenInContractForBalance.balanceOf(wallet.address);
-        if (currentBalance < amount) {
-            logger.warn(`  [${timestamp()}] Saldo ${tokenInName} (${ethers.formatUnits(currentBalance, 18)}) tidak cukup. Melewati swap.`);
-            failureCount++;
-        } else {
-            const tokenInContractForApproval = new ethers.Contract(tokenAddr, ERC20_ABI, wallet); // Gunakan wallet untuk allowance
-            const currentAllowance = await tokenInContractForApproval.allowance(wallet.address, ROUTER_ADDRESS);
-            
-            let approvalProcessedSuccessfully = true;
-            if (currentAllowance < amount) {
-                logger.info(`  [${timestamp()}] Approval diperlukan untuk ${tokenInName}.`);
-                approvalProcessedSuccessfully = await addTransactionToQueue(
-                    (nonce) => approveToken(tokenAddr, amount, nonce),
-                    `${pairName} - Approve ${tokenInName} ${i}`
-                );
-                if (approvalProcessedSuccessfully) {
-                    await delay(3000); // Jeda singkat setelah approval berhasil sebelum swap
-                }
-            } else {
-                logger.info(`  [${timestamp()}] Approval sudah ada untuk ${tokenInName}.`);
-            }
-
-            if (approvalProcessedSuccessfully) {
-                const swapSuccess = await addTransactionToQueue(
-                    (nonce) => swapAuto(direction, amount, nonce),
-                    `${pairName} - Swap ${tokenInName} ${i}`
-                );
-                if (swapSuccess) successCount++;
-                else failureCount++;
-            } else {
-                logger.warn(`  [${timestamp()}] Approval gagal, swap dilewati untuk ${tokenInName}.`);
-                failureCount++;
-            }
-        }
-
-        if (i < totalSwaps) {
-            const delaySeconds = Math.floor(Math.random() * (10 - 5 + 1)) + 5; 
-            logger.progress(`  [${timestamp()}] Menunggu ${delaySeconds} detik...`);
-            await delay(delaySeconds * 1000);
-        }
+    if (currentBalanceA < amountToSwap_A_Fixed) {
+        logger.warn(`  [${timestamp()}] Saldo ${tokenA_Name} (${ethers.formatUnits(currentBalanceA, 18)}) tidak cukup untuk swap A->B. Melewati siklus.`);
+        return false;
     }
-    logger.info(`[${timestamp()}] Sequence Swap ${pairName} Selesai. Berhasil: ${successCount}, Gagal: ${failureCount}`);
-    return { success: successCount, failure: failureCount };
+    
+    logger.info(`  Langkah 1: ${tokenA_Name} ➯ ${tokenB_Name}`);
+    const tokenAContractForApproval = new ethers.Contract(tokenA_Address, ERC20_ABI, wallet);
+    const allowanceA = await tokenAContractForApproval.allowance(wallet.address, ROUTER_ADDRESS);
+    let approveASuccess = true;
+    if (allowanceA < amountToSwap_A_Fixed) {
+        logger.info(`  [${timestamp()}] Approval diperlukan untuk ${tokenA_Name}.`);
+        approveASuccess = await addTransactionToQueue(
+            (nonce) => approveToken(tokenA_Address, amountToSwap_A_Fixed, nonce),
+            `${pairName} Siklus ${cycleNumber} - Approve ${tokenA_Name}`
+        );
+        if (approveASuccess) await delay(3000);
+    } else {
+        logger.info(`  [${timestamp()}] Approval sudah ada untuk ${tokenA_Name}.`);
+    }
+
+    let swapAtoB_Success = false;
+    if (approveASuccess) {
+        swapAtoB_Success = await addTransactionToQueue(
+            (nonce) => swapAuto(`${tokenA_Name.toLowerCase()}To${tokenB_Name.toLowerCase()}`, amountToSwap_A_Fixed, nonce),
+            `${pairName} Siklus ${cycleNumber} - Swap ${tokenA_Name} ➯ ${tokenB_Name}`
+        );
+    }
+
+    if (!swapAtoB_Success) {
+        logger.error(`    Swap ${tokenA_Name} ➯ ${tokenB_Name} pada siklus ${cycleNumber} gagal.`);
+        return false;
+    }
+
+    await delay(10000); 
+    
+    const tokenBContract = new ethers.Contract(tokenB_Address, ERC20_ABI, provider);
+    const amountToSwap_B_Dynamic = await tokenBContract.balanceOf(wallet.address);
+
+    if (amountToSwap_B_Dynamic > 0n) {
+        logger.info(`  Langkah 2: ${tokenB_Name} ➯ ${tokenA_Name} (Swap semua ${ethers.formatUnits(amountToSwap_B_Dynamic, 18)} ${tokenB_Name})`);
+        const tokenBContractForApproval = new ethers.Contract(tokenB_Address, ERC20_ABI, wallet);
+        const allowanceB = await tokenBContractForApproval.allowance(wallet.address, ROUTER_ADDRESS);
+        let approveBSuccess = true;
+        if (allowanceB < amountToSwap_B_Dynamic) {
+            logger.info(`  [${timestamp()}] Approval diperlukan untuk ${tokenB_Name}.`);
+            approveBSuccess = await addTransactionToQueue(
+                (nonce) => approveToken(tokenB_Address, amountToSwap_B_Dynamic, nonce),
+                `${pairName} Siklus ${cycleNumber} - Approve ${tokenB_Name}`
+            );
+            if (approveBSuccess) await delay(3000);
+        } else {
+            logger.info(`  [${timestamp()}] Approval sudah ada untuk ${tokenB_Name}.`);
+        }
+
+        if (approveBSuccess) {
+            const swapBtoA_Success = await addTransactionToQueue(
+                (nonce) => swapAuto(`${tokenB_Name.toLowerCase()}To${tokenA_Name.toLowerCase()}`, amountToSwap_B_Dynamic, nonce),
+                `${pairName} Siklus ${cycleNumber} - Swap ${tokenB_Name} ➯ ${tokenA_Name}`
+            );
+            if (swapBtoA_Success) {
+                logger.success(`    Siklus ${cycleNumber} ${pairName} bolak-balik berhasil!`);
+                cycleFullySuccessful = true;
+            } else {
+                logger.error(`    Swap ${tokenB_Name} ➯ ${tokenA_Name} pada siklus ${cycleNumber} gagal.`);
+            }
+        } else {
+            logger.warn(`  [${timestamp()}] Approval untuk ${tokenB_Name} gagal, swap B->A dilewati.`);
+        }
+    } else {
+        logger.warn(`  [${timestamp()}] Saldo ${tokenB_Name} adalah 0 setelah swap A->B. Tidak ada yang diswap kembali.`);
+    }
+    return cycleFullySuccessful;
 }
 
-// =========================================================================
-// FUNGSI MAIN (NON-TUI)
-// =========================================================================
+
 async function main() {
     console.log("=============================================");
     console.log("     0G LABS AUTO SWAP BOT (Konsol)     ");
     console.log("=============================================");
 
     try {
-        const SWAPS_PER_PAIR = 5; 
-        const USDT_SWAP_AMOUNT = ethers.parseUnits("100", 18); 
-        const ETH_SWAP_AMOUNT = ethers.parseUnits("0.03", 18); 
-        const BTC_SWAP_AMOUNT = ethers.parseUnits("0.003", 18); 
+        const CYCLES_PER_PAIR = 3; 
+        const USDT_SWAP_AMOUNT_FIXED = ethers.parseUnits("50", 18); // Jumlah USDT untuk swap A->B
+        const ETH_SWAP_AMOUNT_FIXED = ethers.parseUnits("0.01", 18);  // Jumlah ETH untuk swap A->B
+        const BTC_SWAP_AMOUNT_FIXED = ethers.parseUnits("0.001", 18); // Jumlah BTC untuk swap A->B
+
+        const MIN_USDT_BALANCE = ethers.parseUnits("100", 18); 
+        const MIN_ETH_BALANCE = ethers.parseUnits("0.02", 18);  
+        const MIN_BTC_BALANCE = ethers.parseUnits("0.002", 18); 
+        const MIN_AOGI_BALANCE_FOR_GAS = ethers.parseUnits("0.02", 18); // Minimum AOGI untuk gas
 
         logger.info(`[${timestamp()}] Memulai Bot... Network: ${NETWORK_NAME}`);
-        await updateWalletData();
+        let balances = await updateWalletData();
+        if (!balances) throw new Error("Gagal memuat saldo awal.");
+
+        if (balances.balanceNative < MIN_AOGI_BALANCE_FOR_GAS) {
+            logger.error(`[${timestamp()}] Saldo AOGI (${ethers.formatEther(balances.balanceNative)}) tidak cukup untuk gas (Min: ${ethers.formatEther(MIN_AOGI_BALANCE_FOR_GAS)}). Bot berhenti.`);
+            process.exit(1);
+        }
 
         logger.progress(`[${timestamp()}] Mengambil Gas Fee Data...`);
         const feeData = await provider.getFeeData();
-
         if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
-            selectedGasOptions = {
-                maxFeePerGas: feeData.maxFeePerGas,
-                maxPriorityFeePerGas: feeData.maxPriorityFeePerGas, 
-            };
+            selectedGasOptions = { maxFeePerGas: feeData.maxFeePerGas, maxPriorityFeePerGas: feeData.maxPriorityFeePerGas };
             logger.info(`[${timestamp()}] Gas (EIP-1559): MaxFee=${ethers.formatUnits(selectedGasOptions.maxFeePerGas, "gwei")} | PrioFee=${ethers.formatUnits(selectedGasOptions.maxPriorityFeePerGas, "gwei")} Gwei`);
         } else if (feeData.gasPrice) {
-            logger.warn(`[${timestamp()}] Jaringan/RPC mungkin tidak mendukung EIP-1559, menggunakan gasPrice legacy.`);
-            selectedGasOptions = {
-                gasPrice: feeData.gasPrice * 120n / 100n, 
-            };
+            selectedGasOptions = { gasPrice: feeData.gasPrice * 120n / 100n };
             logger.info(`[${timestamp()}] Gas (Legacy): ${ethers.formatUnits(selectedGasOptions.gasPrice, "gwei")} Gwei`);
         } else {
-            logger.error(`[${timestamp()}] Gagal mengambil data fee gas dari provider. Menggunakan nilai default.`);
-            selectedGasOptions = {
-                gasPrice: ethers.parseUnits("2", "gwei") 
-            };
-            logger.warn(`[${timestamp()}] Gas (Default): ${ethers.formatUnits(selectedGasOptions.gasPrice, "gwei")} Gwei`);
+            selectedGasOptions = { gasPrice: ethers.parseUnits("2", "gwei") };
+            logger.warn(`[${timestamp()}] Gagal ambil fee, Gas (Default): ${ethers.formatUnits(selectedGasOptions.gasPrice, "gwei")} Gwei`);
         }
-        
-        if (!selectedGasOptions.maxFeePerGas && !selectedGasOptions.gasPrice) {
-            throw new Error("Gagal menetapkan opsi gas yang valid.");
+        if (!selectedGasOptions.maxFeePerGas && !selectedGasOptions.gasPrice) throw new Error("Gagal menetapkan opsi gas.");
+
+        logger.step("Memulai Fase Pemeriksaan & Pengisian Saldo Kritis (jika perlu)");
+        balances = await updateWalletData(false); // Update tanpa log penuh
+        if (balances.balanceUSDT < MIN_USDT_BALANCE) {
+            logger.warn(`[${timestamp()}] Saldo USDT (${ethers.formatUnits(balances.balanceUSDT,18)}) rendah. Mencoba mengisi...`);
+            if (balances.balanceETH >= ETH_SWAP_AMOUNT_FIXED) {
+                logger.info("  Mencoba swap ETH ke USDT untuk pengisian...");
+                await addTransactionToQueue( (nonce) => approveToken(ETH_ADDRESS, ETH_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve ETH" );
+                await delay(3000);
+                await addTransactionToQueue( (nonce) => swapAuto("ethToUsdt", ETH_SWAP_AMOUNT_FIXED, nonce), "Pengisian - ETH ke USDT" );
+            } else if (balances.balanceBTC >= BTC_SWAP_AMOUNT_FIXED) {
+                logger.info("  Mencoba swap BTC ke USDT untuk pengisian...");
+                await addTransactionToQueue( (nonce) => approveToken(BTC_ADDRESS, BTC_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve BTC" );
+                await delay(3000);
+                await addTransactionToQueue( (nonce) => swapAuto("btcToUsdt", BTC_SWAP_AMOUNT_FIXED, nonce), "Pengisian - BTC ke USDT" );
+            } else { logger.warn("  Tidak cukup ETH atau BTC untuk mengisi USDT."); }
         }
+        await transactionQueue; // Selesaikan antrean pengisian
+        balances = await updateWalletData(false); // Update lagi
 
-        await runSwapSequence("USDT & ETH", "usdtToEth", "ethToUsdt", SWAPS_PER_PAIR, USDT_SWAP_AMOUNT, ETH_SWAP_AMOUNT, USDT_ADDRESS, ETH_ADDRESS);
+        if (balances.balanceETH < MIN_ETH_BALANCE) {
+            logger.warn(`[${timestamp()}] Saldo ETH (${ethers.formatUnits(balances.balanceETH,18)}) rendah. Mencoba mengisi...`);
+            if (balances.balanceUSDT >= USDT_SWAP_AMOUNT_FIXED) {
+                 await addTransactionToQueue( (nonce) => approveToken(USDT_ADDRESS, USDT_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve USDT (untuk ETH)" );
+                 await delay(3000);
+                 await addTransactionToQueue( (nonce) => swapAuto("usdtToEth", USDT_SWAP_AMOUNT_FIXED, nonce), "Pengisian - USDT ke ETH" );
+            } else { logger.warn("  Tidak cukup USDT untuk mengisi ETH."); }
+        }
+        await transactionQueue; 
+        balances = await updateWalletData(true); // Log penuh setelah semua potensi pengisian
+
+        logger.step("Memulai Fase Swap Rutin Bolak-Balik");
+
+        await runSwapCycle("USDT & ETH", USDT_ADDRESS, "USDT", USDT_SWAP_AMOUNT_FIXED, ETH_ADDRESS, "ETH", CYCLES_PER_PAIR);
         await updateWalletData(); 
-        await delay(10000); // Jeda antar sequence diperpendek untuk tes
+        await delay(15000); 
 
-        await runSwapSequence("USDT & BTC", "usdtToBtc", "btcToUsdt", SWAPS_PER_PAIR, USDT_SWAP_AMOUNT, BTC_SWAP_AMOUNT, USDT_ADDRESS, BTC_ADDRESS);
+        await runSwapCycle("USDT & BTC", USDT_ADDRESS, "USDT", USDT_SWAP_AMOUNT_FIXED, BTC_ADDRESS, "BTC", CYCLES_PER_PAIR);
         await updateWalletData(); 
-        await delay(10000); // Jeda antar sequence diperpendek untuk tes
+        await delay(15000); 
 
-        await runSwapSequence("BTC & ETH", "btcToEth", "ethToBtc", SWAPS_PER_PAIR, BTC_SWAP_AMOUNT, ETH_SWAP_AMOUNT, BTC_ADDRESS, ETH_ADDRESS);
+        await runSwapCycle("BTC & ETH", BTC_ADDRESS, "BTC", BTC_SWAP_AMOUNT_FIXED, ETH_ADDRESS, "ETH", CYCLES_PER_PAIR);
         await updateWalletData(); 
 
         logger.info(`[${timestamp()}] Semua sequence swap telah selesai ditambahkan ke antrean.`);
         logger.progress(`[${timestamp()}] Menunggu semua transaksi di antrean selesai...`);
         
-        await transactionQueue; 
-        let finalNonceCheck = await provider.getTransactionCount(wallet.address, "pending");
-        // UBAH KONDISI DI SINI: dari '>=' menjadi '<'
-        while (nextNonce !== null && finalNonceCheck < nextNonce ) { 
-             logger.progress(`[${timestamp()}] Menunggu konfirmasi transaksi terakhir... (Nonce jaringan: ${finalNonceCheck}, Target nonce script: ${nextNonce})`);
-             await delay(15000); 
-             finalNonceCheck = await provider.getTransactionCount(wallet.address, "pending");
-        }
+        await transactionQueue; 
+        let finalNonceCheck = await provider.getTransactionCount(wallet.address, "pending");
+        while (nextNonce !== null && finalNonceCheck < nextNonce ) {
+             logger.progress(`[${timestamp()}] Menunggu konfirmasi transaksi terakhir... (Nonce jaringan: ${finalNonceCheck}, Target nonce script: ${nextNonce})`);
+             await delay(15000); 
+             finalNonceCheck = await provider.getTransactionCount(wallet.address, "pending");
+        }
 
         logger.info(`✨✨ [${timestamp()}] SEMUA TRANSAKSI SELESAI! ✨✨`);
         await updateWalletData();
