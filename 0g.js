@@ -53,11 +53,11 @@ const ROUTER_ABI = [
 // =========================================================================
 let transactionQueue = Promise.resolve();
 let nextNonce = null;
-let selectedGasOptions = {}; // <-- Variabel global diubah namanya
+let selectedGasOptions = {};
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const shortHash = (hash) => `${hash.substring(0, 6)}...${hash.substring(hash.length - 4)}`;
-const timestamp = () => new Date().toLocaleTimeString('en-GB', { hour12: false }); // en-GB for HH:MM:SS
+const timestamp = () => new Date().toLocaleTimeString('en-GB', { hour12: false });
 
 // =========================================================================
 // FUNGSI INTI
@@ -93,7 +93,7 @@ async function approveToken(tokenAddress, amount) {
         }
         const tx = await tokenContract.approve(ROUTER_ADDRESS, amount, {
             gasLimit: APPROVAL_GAS_LIMIT,
-            ...selectedGasOptions // <-- Menggunakan selectedGasOptions
+            ...selectedGasOptions
         });
         logger.progress(`  [${timestamp()}] Approval Tx Dikirim: ${shortHash(tx.hash)}`);
         await tx.wait();
@@ -135,12 +135,13 @@ async function swapAuto(direction, amountIn) {
 
         const tx = await swapContract.exactInputSingle(params, {
             gasLimit: SWAP_GAS_LIMIT,
-            ...selectedGasOptions, // <-- Menggunakan selectedGasOptions
+            ...selectedGasOptions, 
             nonce: nextNonce 
         });
         logger.progress(`  [${timestamp()}] Swap Tx Dikirim: ${shortHash(tx.hash)}`);
         const receipt = await tx.wait();
-        const feeAOGI = ethers.formatEther(receipt.gasUsed * (selectedGasOptions.gasPrice || selectedGasOptions.maxFeePerGas || ethers.parseUnits("1", "gwei"))); // Perkiraan Fee
+        const effectiveGasPrice = receipt.gasPrice || selectedGasOptions.gasPrice || selectedGasOptions.maxFeePerGas || ethers.parseUnits("1", "gwei");
+        const feeAOGI = ethers.formatEther(receipt.gasUsed * effectiveGasPrice);
         logger.info(`  [${timestamp()}] Swap Tx Berhasil: ${shortHash(tx.hash)} | Fee: ${feeAOGI} AOGI`);
         return true;
 
@@ -234,20 +235,19 @@ async function main() {
         logger.info(`[${timestamp()}] Memulai Bot... Network: ${NETWORK_NAME}`);
         await updateWalletData();
 
-        // --- BAGIAN PENGATURAN GAS BARU ---
         logger.progress(`[${timestamp()}] Mengambil Gas Fee Data...`);
         const feeData = await provider.getFeeData();
 
         if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
             selectedGasOptions = {
                 maxFeePerGas: feeData.maxFeePerGas,
-                maxPriorityFeePerGas: feeData.maxPriorityFeePerGas * 110n / 100n, // +10% Prio Fee
+                maxPriorityFeePerGas: feeData.maxPriorityFeePerGas, 
             };
             logger.info(`[${timestamp()}] Gas (EIP-1559): MaxFee=${ethers.formatUnits(selectedGasOptions.maxFeePerGas, "gwei")} | PrioFee=${ethers.formatUnits(selectedGasOptions.maxPriorityFeePerGas, "gwei")} Gwei`);
         } else if (feeData.gasPrice) {
             logger.warn(`[${timestamp()}] Jaringan/RPC mungkin tidak mendukung EIP-1559, menggunakan gasPrice legacy.`);
             selectedGasOptions = {
-                gasPrice: feeData.gasPrice * 120n / 100n, // +20% Legacy Gas
+                gasPrice: feeData.gasPrice * 120n / 100n, 
             };
             logger.info(`[${timestamp()}] Gas (Legacy): ${ethers.formatUnits(selectedGasOptions.gasPrice, "gwei")} Gwei`);
         } else {
@@ -261,15 +261,14 @@ async function main() {
         if (!selectedGasOptions.maxFeePerGas && !selectedGasOptions.gasPrice) {
             throw new Error("Gagal menetapkan opsi gas yang valid.");
         }
-        // --- AKHIR BAGIAN PENGATURAN GAS BARU ---
 
         await runSwapSequence("USDT & ETH", "usdtToEth", "ethToUsdt", SWAPS_PER_PAIR, USDT_SWAP_AMOUNT, ETH_SWAP_AMOUNT, USDT_ADDRESS, ETH_ADDRESS);
         await updateWalletData(); 
-        await delay(60000); 
+        await delay(6000); 
 
         await runSwapSequence("USDT & BTC", "usdtToBtc", "btcToUsdt", SWAPS_PER_PAIR, USDT_SWAP_AMOUNT, BTC_SWAP_AMOUNT, USDT_ADDRESS, BTC_ADDRESS);
         await updateWalletData(); 
-        await delay(60000); 
+        await delay(6000); 
 
         await runSwapSequence("BTC & ETH", "btcToEth", "ethToBtc", SWAPS_PER_PAIR, BTC_SWAP_AMOUNT, ETH_SWAP_AMOUNT, BTC_ADDRESS, ETH_ADDRESS);
         await updateWalletData(); 
@@ -278,9 +277,11 @@ async function main() {
         logger.progress(`[${timestamp()}] Menunggu semua transaksi di antrean selesai...`);
         
         await transactionQueue; 
-        while (nextNonce !== null && (await provider.getTransactionCount(wallet.address, "pending")) >= nextNonce ) { // Perbaikan logika while
-             logger.progress(`[${timestamp()}] Masih ada transaksi yang diproses (Nonce: ${nextNonce-1}), menunggu...`);
+        let finalNonceCheck = await provider.getTransactionCount(wallet.address, "pending");
+        while (nextNonce !== null && finalNonceCheck >= nextNonce ) {
+             logger.progress(`[${timestamp()}] Masih ada transaksi yang diproses (Nonce jaringan: ${finalNonceCheck}, Nonce script berikutnya: ${nextNonce}), menunggu...`);
              await delay(15000); 
+             finalNonceCheck = await provider.getTransactionCount(wallet.address, "pending");
         }
 
         logger.info(`✨✨ [${timestamp()}] SEMUA TRANSAKSI SELESAI! ✨✨`);
