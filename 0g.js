@@ -299,13 +299,14 @@ async function main() {
         logger.info(`[${timestamp()}] Semua sequence swap telah selesai ditambahkan ke antrean.`);
         logger.progress(`[${timestamp()}] Menunggu semua transaksi di antrean selesai...`);
         
-        await transactionQueue; 
-        let finalNonceCheck = await provider.getTransactionCount(wallet.address, "pending");
-        while (nextNonce !== null && finalNonceCheck >= nextNonce ) {
-             logger.progress(`[${timestamp()}] Masih ada transaksi yang diproses (Nonce jaringan: ${finalNonceCheck}, Nonce script berikutnya: ${nextNonce}), menunggu...`);
-             await delay(15000); 
-             finalNonceCheck = await provider.getTransactionCount(wallet.address, "pending");
-        }
+        await transactionQueue; 
+        let finalNonceCheck = await provider.getTransactionCount(wallet.address, "pending");
+        // UBAH KONDISI DI SINI: dari '>=' menjadi '<'
+        while (nextNonce !== null && finalNonceCheck < nextNonce ) { 
+             logger.progress(`[${timestamp()}] Menunggu konfirmasi transaksi terakhir... (Nonce jaringan: ${finalNonceCheck}, Target nonce script: ${nextNonce})`);
+             await delay(15000); 
+             finalNonceCheck = await provider.getTransactionCount(wallet.address, "pending");
+        }
 
         logger.info(`✨✨ [${timestamp()}] SEMUA TRANSAKSI SELESAI! ✨✨`);
         await updateWalletData();
