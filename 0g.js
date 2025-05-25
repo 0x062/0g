@@ -209,7 +209,7 @@ async function runSwapSequence(pairName, directionA, directionB, totalSwaps, amo
             else failureCount++;
         }
         if (i < totalSwaps) {
-            const delaySeconds = Math.floor(Math.random() * (60 - 30 + 1)) + 30;
+            const delaySeconds = 5;
             logger.progress(`  [${timestamp()}] Menunggu ${delaySeconds} detik...`);
             await delay(delaySeconds * 1000);
         }
