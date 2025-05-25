@@ -83,29 +83,26 @@ async function updateWalletData() {
     }
 }
 
-async function approveToken(tokenAddress, amount) {
+async function approveToken(tokenAddress, amount, nonceForApproval) {
     try {
         const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, wallet);
-        const currentAllowance = await tokenContract.allowance(wallet.address, ROUTER_ADDRESS);
-        if (currentAllowance >= amount) {
-            logger.info(`  [${timestamp()}] Approval tidak diperlukan.`);
-            return true;
-        }
+        logger.info(`  [${timestamp()}] Mengirim approval untuk ${ethers.formatUnits(amount, 18)} token...`);
         const tx = await tokenContract.approve(ROUTER_ADDRESS, amount, {
             gasLimit: APPROVAL_GAS_LIMIT,
-            ...selectedGasOptions
+            ...selectedGasOptions,
+            nonce: nonceForApproval
         });
-        logger.progress(`  [${timestamp()}] Approval Tx Dikirim: ${shortHash(tx.hash)}`);
+        logger.progress(`  [${timestamp()}] Approval Tx Dikirim: ${shortHash(tx.hash)} (Nonce: ${nonceForApproval})`);
         await tx.wait();
-        logger.info(`  [${timestamp()}] Approval berhasil.`);
+        logger.info(`  [${timestamp()}] Approval berhasil (Nonce: ${nonceForApproval}).`);
         return true;
     } catch (error) {
-        logger.error(`  [${timestamp()}] Approval gagal: ${error.message}`);
+        logger.error(`  [${timestamp()}] Approval gagal (Nonce: ${nonceForApproval}): ${error.message}`);
         return false;
     }
 }
 
-async function swapAuto(direction, amountIn) {
+async function swapAuto(direction, amountIn, nonceForSwap) {
     try {
         const swapContract = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, wallet);
         const deadline = Math.floor(Date.now() / 1000) + 120; 
@@ -123,10 +120,7 @@ async function swapAuto(direction, amountIn) {
         }
 
         logger.info(`  [${timestamp()}] Memulai Swap ${tokenInName} ➯ ${tokenOutName} (${ethers.formatUnits(amountIn, 18)} ${tokenInName})`);
-        const approved = await approveToken(tokenInAddress, amountIn);
-        if (!approved) throw new Error("Approval gagal, swap dibatalkan.");
-        await delay(2000); 
-
+        
         params = {
             tokenIn: tokenInAddress, tokenOut: tokenOutAddress, fee: 3000, 
             recipient: wallet.address, deadline, amountIn, 
@@ -136,19 +130,19 @@ async function swapAuto(direction, amountIn) {
         const tx = await swapContract.exactInputSingle(params, {
             gasLimit: SWAP_GAS_LIMIT,
             ...selectedGasOptions, 
-            nonce: nextNonce 
+            nonce: nonceForSwap 
         });
-        logger.progress(`  [${timestamp()}] Swap Tx Dikirim: ${shortHash(tx.hash)}`);
+        logger.progress(`  [${timestamp()}] Swap Tx Dikirim: ${shortHash(tx.hash)} (Nonce: ${nonceForSwap})`);
         const receipt = await tx.wait();
         const effectiveGasPrice = receipt.gasPrice || selectedGasOptions.gasPrice || selectedGasOptions.maxFeePerGas || ethers.parseUnits("1", "gwei");
         const feeAOGI = ethers.formatEther(receipt.gasUsed * effectiveGasPrice);
-        logger.info(`  [${timestamp()}] Swap Tx Berhasil: ${shortHash(tx.hash)} | Fee: ${feeAOGI} AOGI`);
+        logger.info(`  [${timestamp()}] Swap Tx Berhasil: ${shortHash(tx.hash)} (Nonce: ${nonceForSwap}) | Fee: ${feeAOGI} AOGI`);
         return true;
 
     } catch (error) {
-        logger.error(`  [${timestamp()}] Swap ${direction} gagal: ${error.message}`);
+        logger.error(`  [${timestamp()}] Swap ${direction} gagal (Nonce: ${nonceForSwap}): ${error.message}`);
         if (error.message && error.message.toLowerCase().includes("nonce")) {
-            logger.warn(`  [${timestamp()}] Terdeteksi error nonce, mencoba refresh nonce...`);
+            logger.warn(`  [${timestamp()}] Terdeteksi error nonce pada swap, mencoba refresh nonce global...`);
             nextNonce = null; 
         }
         return false; 
@@ -167,6 +161,11 @@ function addTransactionToQueue(transactionFunction, description) {
             if (success) {
                 nextNonce++;
             } else {
+                // Jika transaksi (approve atau swap) gagal, kita mungkin ingin mereset nonce
+                // agar diambil ulang, atau membiarkannya untuk coba lagi nonce yang sama
+                // pada item antrean berikutnya jika errornya bukan karena nonce (misal, revert).
+                // Untuk sekarang, reset jika gagal agar fresh.
+                logger.warn(`[${timestamp()}] Transaksi "${description}" gagal, nonce akan di-refresh untuk tugas berikutnya.`);
                 nextNonce = null;
             }
             return success;
@@ -191,25 +190,49 @@ async function runSwapSequence(pairName, directionA, directionB, totalSwaps, amo
     for (let i = 1; i <= totalSwaps; i++) {
         const direction = (i % 2 === 1) ? directionA : directionB;
         const amount = (i % 2 === 1) ? amountA : amountB;
-        const tokenAddr = (i % 2 === 1) ? tokenAAddr : tokenBAddr;
-        const tokenName = direction.split("To")[0].toUpperCase();
+        const tokenAddr = (i % 2 === 1) ? tokenAAddr : tokenBAddr; 
+        const tokenInName = direction.split("To")[0].toUpperCase();
 
         logger.info(`[${timestamp()}] [${pairName}] Swap ke-${i}/${totalSwaps} | Arah: ${direction}`);
-        const tokenContract = new ethers.Contract(tokenAddr, ERC20_ABI, provider);
-        const currentBalance = await tokenContract.balanceOf(wallet.address);
+        
+        const tokenInContractForBalance = new ethers.Contract(tokenAddr, ERC20_ABI, provider);
+        const currentBalance = await tokenInContractForBalance.balanceOf(wallet.address);
         if (currentBalance < amount) {
-            logger.warn(`  [${timestamp()}] Saldo ${tokenName} (${ethers.formatUnits(currentBalance, 18)}) tidak cukup. Melewati swap.`);
+            logger.warn(`  [${timestamp()}] Saldo ${tokenInName} (${ethers.formatUnits(currentBalance, 18)}) tidak cukup. Melewati swap.`);
             failureCount++;
         } else {
-            const success = await addTransactionToQueue(
-                (nonce) => swapAuto(direction, amount),
-                `${pairName} - Swap ${i}`
-            );
-            if (success) successCount++;
-            else failureCount++;
+            const tokenInContractForApproval = new ethers.Contract(tokenAddr, ERC20_ABI, wallet); // Gunakan wallet untuk allowance
+            const currentAllowance = await tokenInContractForApproval.allowance(wallet.address, ROUTER_ADDRESS);
+            
+            let approvalProcessedSuccessfully = true;
+            if (currentAllowance < amount) {
+                logger.info(`  [${timestamp()}] Approval diperlukan untuk ${tokenInName}.`);
+                approvalProcessedSuccessfully = await addTransactionToQueue(
+                    (nonce) => approveToken(tokenAddr, amount, nonce),
+                    `${pairName} - Approve ${tokenInName} ${i}`
+                );
+                if (approvalProcessedSuccessfully) {
+                    await delay(3000); // Jeda singkat setelah approval berhasil sebelum swap
+                }
+            } else {
+                logger.info(`  [${timestamp()}] Approval sudah ada untuk ${tokenInName}.`);
+            }
+
+            if (approvalProcessedSuccessfully) {
+                const swapSuccess = await addTransactionToQueue(
+                    (nonce) => swapAuto(direction, amount, nonce),
+                    `${pairName} - Swap ${tokenInName} ${i}`
+                );
+                if (swapSuccess) successCount++;
+                else failureCount++;
+            } else {
+                logger.warn(`  [${timestamp()}] Approval gagal, swap dilewati untuk ${tokenInName}.`);
+                failureCount++;
+            }
         }
+
         if (i < totalSwaps) {
-            const delaySeconds = 5;
+            const delaySeconds = Math.floor(Math.random() * (10 - 5 + 1)) + 5; 
             logger.progress(`  [${timestamp()}] Menunggu ${delaySeconds} detik...`);
             await delay(delaySeconds * 1000);
         }
@@ -264,11 +287,11 @@ async function main() {
 
         await runSwapSequence("USDT & ETH", "usdtToEth", "ethToUsdt", SWAPS_PER_PAIR, USDT_SWAP_AMOUNT, ETH_SWAP_AMOUNT, USDT_ADDRESS, ETH_ADDRESS);
         await updateWalletData(); 
-        await delay(6000); 
+        await delay(10000); // Jeda antar sequence diperpendek untuk tes
 
         await runSwapSequence("USDT & BTC", "usdtToBtc", "btcToUsdt", SWAPS_PER_PAIR, USDT_SWAP_AMOUNT, BTC_SWAP_AMOUNT, USDT_ADDRESS, BTC_ADDRESS);
         await updateWalletData(); 
-        await delay(6000); 
+        await delay(10000); // Jeda antar sequence diperpendek untuk tes
 
         await runSwapSequence("BTC & ETH", "btcToEth", "ethToBtc", SWAPS_PER_PAIR, BTC_SWAP_AMOUNT, ETH_SWAP_AMOUNT, BTC_ADDRESS, ETH_ADDRESS);
         await updateWalletData(); 
