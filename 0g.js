@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { ethers } from "ethers";
+import { sendTelegramNotification } from './telegramReporter.js';
 
 // =========================================================================
 // KONFIGURASI & KONSTANTA
@@ -471,8 +472,13 @@ async function main() {
              finalNonceCheck = await provider.getTransactionCount(wallet.address, "pending");
         }
 
-        logger.info(`✨✨ [${timestamp()}] SEMUA TRANSAKSI SELESAI! ✨✨`);
-        await updateWalletData();
+        const finalBalances = await updateWalletData(true);
+        overallSummary += "\nSaldo Akhir:\n" + (finalBalances?.reportString || "Data saldo tidak tersedia") + "\n\n";
+        overallSummary += `Total Siklus Sukses: ${totalCyclesSuccess}\nTotal Siklus Gagal/Tidak Lengkap: ${totalCyclesFailed}\n`;
+        overallSummary += "✨ SEMUA OPERASI SELESAI! ✨";
+
+        logger.info(overallSummary.replace(/\[✓\]\s/g, '').replace(/\[⏳\]\s/g, '').replace(/\[⚠\]\s/g, '').replace(/\[✗\]\s/g, '').replace(/---/g, '')); // Log ringkasan bersih
+        await sendTelegramNotification(overallSummary);
         process.exit(0);
 
     } catch (error) {
