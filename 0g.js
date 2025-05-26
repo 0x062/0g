@@ -265,7 +265,7 @@ async function main() {
         const MIN_USDT_BALANCE = ethers.parseUnits("100", 18); 
         const MIN_ETH_BALANCE = ethers.parseUnits("0.02", 18);  
         const MIN_BTC_BALANCE = ethers.parseUnits("0.002", 18); 
-        const MIN_AOGI_BALANCE_FOR_GAS = ethers.parseUnits("0.02", 16601); // Minimum AOGI untuk gas
+        const MIN_AOGI_BALANCE_FOR_GAS = ethers.parseUnits("0.02", 18); // Minimum AOGI untuk gas
 
         logger.info(`[${timestamp()}] Memulai Bot... Network: ${NETWORK_NAME}`);
         let balances = await updateWalletData();
