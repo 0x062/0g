@@ -1,6 +1,9 @@
 import "dotenv/config";
 import { ethers } from "ethers";
 
+// =========================================================================
+// KONFIGURASI & KONSTANTA
+// =========================================================================
 const RPC_URL = process.env.RPC_URL;
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const ROUTER_ADDRESS = process.env.ROUTER_ADDRESS;
@@ -11,6 +14,16 @@ const NETWORK_NAME = process.env.NETWORK_NAME || "0G Newton Testnet";
 const APPROVAL_GAS_LIMIT = 100000;
 const SWAP_GAS_LIMIT = 150000;
 
+// --- KONSTANTA MINIMUM SALDO DIPINDAHKAN KE SINI (GLOBAL SCOPE) ---
+const MIN_USDT_BALANCE = ethers.parseUnits("100", 18); 
+const MIN_ETH_BALANCE = ethers.parseUnits("0.02", 18);  
+const MIN_BTC_BALANCE = ethers.parseUnits("0.000002", 18); 
+const MIN_AOGI_BALANCE_FOR_GAS = ethers.parseUnits("0.00002", 18);
+// --- AKHIR PEMINDAHAN ---
+
+// =========================================================================
+// SETUP ETHERS & WALLET
+// =========================================================================
 if (!RPC_URL || !PRIVATE_KEY || !ROUTER_ADDRESS || !USDT_ADDRESS || !ETH_ADDRESS || !BTC_ADDRESS) {
     console.error("❌ Error: Pastikan semua variabel .env (RPC_URL, PRIVATE_KEY, ROUTER_ADDRESS, USDT_ADDRESS, ETH_ADDRESS, BTC_ADDRESS) sudah diisi.");
     process.exit(1);
@@ -18,6 +31,9 @@ if (!RPC_URL || !PRIVATE_KEY || !ROUTER_ADDRESS || !USDT_ADDRESS || !ETH_ADDRESS
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
+// =========================================================================
+// LOGGER SEDERHANA
+// =========================================================================
 const colors = { reset: "\x1b[0m", green: "\x1b[32m", yellow: "\x1b[33m", red: "\x1b[31m", cyan: "\x1b[36m", white: "\x1b[37m" };
 const logger = {
     info: (msg) => console.log(`${colors.green}[✓] ${msg}${colors.reset}`),
@@ -25,8 +41,12 @@ const logger = {
     error: (msg) => console.log(`${colors.red}[✗] ${msg}${colors.reset}`),
     progress: (msg) => console.log(`${colors.cyan}[⏳] ${msg}${colors.reset}`),
     step: (msg) => console.log(`\n${colors.white}--- ${msg} ---${colors.reset}`),
-    success: (msg) => console.log(`${colors.green}[✔] ${msg}${colors.reset}`), // <-- TAMBAHKAN BARIS INI
+    success: (msg) => console.log(`${colors.green}[✔] ${msg}${colors.reset}`),
 };
+
+// =========================================================================
+// ABIs (Disederhanakan + Router)
+// =========================================================================
 const ERC20_ABI = [
     { name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "_spender", type: "address" }, { name: "_value", type: "uint256" }], outputs: [{ name: "", type: "bool" }] },
     { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "_owner", type: "address" }], outputs: [{ name: "balance", type: "uint256" }] },
@@ -36,6 +56,9 @@ const ROUTER_ABI = [
     { inputs: [{ components: [ { internalType: "address", name: "tokenIn", type: "address" }, { internalType: "address", name: "tokenOut", type: "address" }, { internalType: "uint24", name: "fee", type: "uint24" }, { internalType: "address", name: "recipient", type: "address" }, { internalType: "uint256", name: "deadline", type: "uint256" }, { internalType: "uint256", name: "amountIn", type: "uint256" }, { internalType: "uint256", name: "amountOutMinimum", type: "uint256" }, { internalType: "uint160", name: "sqrtPriceLimitX96", type: "uint160" }, ], internalType: "struct ISwapRouter.ExactInputSingleParams", name: "params", type: "tuple", }, ], name: "exactInputSingle", outputs: [{ internalType: "uint256", name: "amountOut", type: "uint256" }], stateMutability: "payable", type: "function", },
 ];
 
+// =========================================================================
+// STATE & UTILITIES
+// =========================================================================
 let transactionQueue = Promise.resolve();
 let nextNonce = null;
 let selectedGasOptions = {};
@@ -44,6 +67,9 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const shortHash = (hash) => `${hash.substring(0, 6)}...${hash.substring(hash.length - 4)}`;
 const timestamp = () => new Date().toLocaleTimeString('en-GB', { hour12: false });
 
+// =========================================================================
+// FUNGSI INTI
+// =========================================================================
 async function updateWalletData(logFull = true) {
     try {
         const walletAddress = wallet.address;
@@ -241,8 +267,7 @@ async function runSwapCycle(
             continue; 
         }
 
-        // ... setelah swap A->B berhasil ...
-        await delay(10000); // Jeda agar saldo terupdate di RPC (bisa disesuaikan)
+        await delay(10000); 
         
         const tokenBContractProvider = new ethers.Contract(tokenB_Address, ERC20_ABI, provider);
         const currentBalanceOfTokenB = await tokenBContractProvider.balanceOf(wallet.address);
@@ -255,15 +280,12 @@ async function runSwapCycle(
         } else if (tokenB_Address.toLowerCase() === USDT_ADDRESS.toLowerCase()) {
             minBalanceToKeepForTokenB = MIN_USDT_BALANCE; 
         }
-        // Tambahkan token lain jika ada
 
         let amountToSwap_B_Dynamic = 0n;
         if (currentBalanceOfTokenB > minBalanceToKeepForTokenB) {
             amountToSwap_B_Dynamic = currentBalanceOfTokenB - minBalanceToKeepForTokenB;
         }
 
-        // Tambahkan pengecekan apakah jumlah yang akan diswap signifikan (misal lebih dari sekian wei)
-        // Untuk sekarang, kita hanya cek > 0
         if (amountToSwap_B_Dynamic > 0n) {
             logger.info(`  Langkah 2: ${tokenB_Name} ➯ ${tokenA_Name} (Swap ${ethers.formatUnits(amountToSwap_B_Dynamic, 18)} ${tokenB_Name}, sisakan ~${ethers.formatUnits(minBalanceToKeepForTokenB, 18)} ${tokenB_Name})`);
             
@@ -298,9 +320,6 @@ async function runSwapCycle(
             }
         } else {
             logger.warn(`  [${timestamp()}] Saldo ${tokenB_Name} (${ethers.formatUnits(currentBalanceOfTokenB,18)}) tidak cukup untuk diswap kembali setelah menyisakan minimum, atau sudah 0. Swap B->A dilewati untuk siklus ${cycle}.`);
-            // Jika tidak ada yang di-swap kembali, siklus ini mungkin tidak dianggap gagal total,
-            // tergantung definisi Anda. Untuk sekarang, kita biarkan overallFailureCycles tidak bertambah di sini.
-            // Atau, jika Anda anggap ini kegagalan siklus, tambahkan: overallFailureCycles++;
         }
 
         if (cycle < totalCycles) {
@@ -323,11 +342,6 @@ async function main() {
         const USDT_SWAP_AMOUNT_FIXED = ethers.parseUnits("50", 18); 
         const ETH_SWAP_AMOUNT_FIXED = ethers.parseUnits("0.01", 18);  
         const BTC_SWAP_AMOUNT_FIXED = ethers.parseUnits("0.001", 18); 
-
-        const MIN_USDT_BALANCE = ethers.parseUnits("100", 18); 
-        const MIN_ETH_BALANCE = ethers.parseUnits("0.02", 18);  
-        const MIN_BTC_BALANCE = ethers.parseUnits("0.000002", 18); 
-        const MIN_AOGI_BALANCE_FOR_GAS = ethers.parseUnits("0.00002", 18);
 
         logger.info(`[${timestamp()}] Memulai Bot... Network: ${NETWORK_NAME}`);
         let balances = await updateWalletData();
@@ -360,7 +374,7 @@ async function main() {
             if (ethBalForReplenish >= ETH_SWAP_AMOUNT_FIXED) {
                 logger.info("  Mencoba swap ETH ke USDT untuk pengisian...");
                 await addTransactionToQueue( (nonce) => approveToken(ETH_ADDRESS, ETH_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve ETH (untuk USDT)" );
-                if(nextNonce !== null) await delay(3000); // Delay only if approve actually happened and queue advanced
+                if(nextNonce !== null) await delay(3000);
                 await addTransactionToQueue( (nonce) => swapAuto("ethToUsdt", ETH_SWAP_AMOUNT_FIXED, nonce), "Pengisian - ETH ke USDT" );
             } else {
                 const btcBalForReplenish = await (new ethers.Contract(BTC_ADDRESS, ERC20_ABI, provider)).balanceOf(wallet.address);
