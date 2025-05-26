@@ -368,7 +368,7 @@ async function main() {
 
         logger.step("Memulai Fase Pemeriksaan & Pengisian Saldo Kritis (jika perlu)");
         balances = await updateWalletData(false); 
-        if (balances.balanceUSDT < MIN_USDT_BALANCE) {
+        if (balances.balanceUSDT <= MIN_USDT_BALANCE) {
             logger.warn(`[${timestamp()}] Saldo USDT (${ethers.formatUnits(balances.balanceUSDT,18)}) rendah. Mencoba mengisi...`);
             const ethBalForReplenish = await (new ethers.Contract(ETH_ADDRESS, ERC20_ABI, provider)).balanceOf(wallet.address);
             if (ethBalForReplenish >= ETH_SWAP_AMOUNT_FIXED) {
@@ -391,7 +391,7 @@ async function main() {
         await transactionQueue; 
         balances = await updateWalletData(false); 
 
-        if (balances.balanceETH < MIN_ETH_BALANCE) {
+        if (balances.balanceETH <= MIN_ETH_BALANCE) {
             logger.warn(`[${timestamp()}] Saldo ETH (${ethers.formatUnits(balances.balanceETH,18)}) rendah. Mencoba mengisi...`);
             if (balances.balanceUSDT >= USDT_SWAP_AMOUNT_FIXED) {
                  await addTransactionToQueue( (nonce) => approveToken(USDT_ADDRESS, USDT_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve USDT (untuk ETH)" );
@@ -412,7 +412,7 @@ async function main() {
         await transactionQueue;
         balances = await updateWalletData(false);
 
-        if (balances.balanceBTC < MIN_BTC_BALANCE) {
+        if (balances.balanceBTC <= MIN_BTC_BALANCE) {
             logger.warn(`[${timestamp()}] Saldo BTC (${ethers.formatUnits(balances.balanceBTC,18)}) rendah. Mencoba mengisi...`);
             if (balances.balanceUSDT >= USDT_SWAP_AMOUNT_FIXED) {
                  await addTransactionToQueue( (nonce) => approveToken(USDT_ADDRESS, USDT_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve USDT (untuk BTC)" );
