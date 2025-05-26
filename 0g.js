@@ -95,14 +95,30 @@ async function swapAuto(direction, amountIn, nonceForSwap) {
         let params;
         let tokenInAddress, tokenOutAddress, tokenInName, tokenOutName;
 
-        switch (direction) {
-            case "usdtToEth": [tokenInAddress, tokenOutAddress, tokenInName, tokenOutName] = [USDT_ADDRESS, ETH_ADDRESS, 'USDT', 'ETH']; break;
-            case "ethToUsdt": [tokenInAddress, tokenOutAddress, tokenInName, tokenOutName] = [ETH_ADDRESS, USDT_ADDRESS, 'ETH', 'USDT']; break;
-            case "usdtToBtc": [tokenInAddress, tokenOutAddress, tokenInName, tokenOutName] = [USDT_ADDRESS, BTC_ADDRESS, 'USDT', 'BTC']; break;
-            case "btcToUsdt": [tokenInAddress, tokenOutAddress, tokenInName, tokenOutName] = [BTC_ADDRESS, USDT_ADDRESS, 'BTC', 'USDT']; break;
-            case "btcToEth": [tokenInAddress, tokenOutAddress, tokenInName, tokenOutName] = [BTC_ADDRESS, ETH_ADDRESS, 'BTC', 'ETH']; break;
-            case "ethToBtc": [tokenInAddress, tokenOutAddress, tokenInName, tokenOutName] = [ETH_ADDRESS, BTC_ADDRESS, 'ETH', 'BTC']; break;
-            default: throw new Error(`Arah swap tidak dikenal: ${direction}`);
+        const normalizedDirection = direction.toLowerCase();
+
+        switch (normalizedDirection) {
+            case "usdttousdt": 
+            case "usdttoeth": 
+                [tokenInAddress, tokenOutAddress, tokenInName, tokenOutName] = [USDT_ADDRESS, ETH_ADDRESS, 'USDT', 'ETH']; 
+                break;
+            case "ethtousdt": 
+                [tokenInAddress, tokenOutAddress, tokenInName, tokenOutName] = [ETH_ADDRESS, USDT_ADDRESS, 'ETH', 'USDT']; 
+                break;
+            case "usdttobtc": 
+                [tokenInAddress, tokenOutAddress, tokenInName, tokenOutName] = [USDT_ADDRESS, BTC_ADDRESS, 'USDT', 'BTC']; 
+                break;
+            case "btctousdt": 
+                [tokenInAddress, tokenOutAddress, tokenInName, tokenOutName] = [BTC_ADDRESS, USDT_ADDRESS, 'BTC', 'USDT']; 
+                break;
+            case "btctoeth": 
+                [tokenInAddress, tokenOutAddress, tokenInName, tokenOutName] = [BTC_ADDRESS, ETH_ADDRESS, 'BTC', 'ETH']; 
+                break;
+            case "ethtobtc": 
+                [tokenInAddress, tokenOutAddress, tokenInName, tokenOutName] = [ETH_ADDRESS, BTC_ADDRESS, 'ETH', 'BTC']; 
+                break;
+            default: 
+                throw new Error(`Arah swap tidak dikenal: ${direction}`);
         }
 
         logger.info(`  [${timestamp()}] Memulai Swap ${tokenInName} ➯ ${tokenOutName} (${ethers.formatUnits(amountIn, 18)} ${tokenInName})`);
@@ -168,91 +184,114 @@ async function runSwapCycle(
     pairName,
     tokenA_Address, tokenA_Name, amountToSwap_A_Fixed,
     tokenB_Address, tokenB_Name,
-    cycleNumber, totalCycles
+    totalCycles
 ) {
-    logger.info(`[${timestamp()}] [${pairName}] Siklus ke-${cycleNumber}/${totalCycles}`);
-    let cycleFullySuccessful = false;
+    logger.step(`Memulai Sequence Swap Bolak-Balik ${pairName} (${totalCycles} siklus)`);
+    let overallSuccessCycles = 0;
+    let overallFailureCycles = 0;
 
-    const tokenAContract = new ethers.Contract(tokenA_Address, ERC20_ABI, provider);
-    let currentBalanceA = await tokenAContract.balanceOf(wallet.address);
+    for (let cycle = 1; cycle <= totalCycles; cycle++) {
+        logger.info(`[${timestamp()}] [${pairName}] Siklus ke-${cycle}/${totalCycles}`);
+        
+        const tokenAContractProvider = new ethers.Contract(tokenA_Address, ERC20_ABI, provider);
+        let currentBalanceA = await tokenAContractProvider.balanceOf(wallet.address);
 
-    if (currentBalanceA < amountToSwap_A_Fixed) {
-        logger.warn(`  [${timestamp()}] Saldo ${tokenA_Name} (${ethers.formatUnits(currentBalanceA, 18)}) tidak cukup untuk swap A->B. Melewati siklus.`);
-        return false;
-    }
-    
-    logger.info(`  Langkah 1: ${tokenA_Name} ➯ ${tokenB_Name}`);
-    const tokenAContractForApproval = new ethers.Contract(tokenA_Address, ERC20_ABI, wallet);
-    const allowanceA = await tokenAContractForApproval.allowance(wallet.address, ROUTER_ADDRESS);
-    let approveASuccess = true;
-    if (allowanceA < amountToSwap_A_Fixed) {
-        logger.info(`  [${timestamp()}] Approval diperlukan untuk ${tokenA_Name}.`);
-        approveASuccess = await addTransactionToQueue(
-            (nonce) => approveToken(tokenA_Address, amountToSwap_A_Fixed, nonce),
-            `${pairName} Siklus ${cycleNumber} - Approve ${tokenA_Name}`
-        );
-        if (approveASuccess) await delay(3000);
-    } else {
-        logger.info(`  [${timestamp()}] Approval sudah ada untuk ${tokenA_Name}.`);
-    }
-
-    let swapAtoB_Success = false;
-    if (approveASuccess) {
-        swapAtoB_Success = await addTransactionToQueue(
-            (nonce) => swapAuto(`${tokenA_Name.toLowerCase()}To${tokenB_Name.toLowerCase()}`, amountToSwap_A_Fixed, nonce),
-            `${pairName} Siklus ${cycleNumber} - Swap ${tokenA_Name} ➯ ${tokenB_Name}`
-        );
-    }
-
-    if (!swapAtoB_Success) {
-        logger.error(`    Swap ${tokenA_Name} ➯ ${tokenB_Name} pada siklus ${cycleNumber} gagal.`);
-        return false;
-    }
-
-    await delay(10000); 
-    
-    const tokenBContract = new ethers.Contract(tokenB_Address, ERC20_ABI, provider);
-    const amountToSwap_B_Dynamic = await tokenBContract.balanceOf(wallet.address);
-
-    if (amountToSwap_B_Dynamic > 0n) {
-        logger.info(`  Langkah 2: ${tokenB_Name} ➯ ${tokenA_Name} (Swap semua ${ethers.formatUnits(amountToSwap_B_Dynamic, 18)} ${tokenB_Name})`);
-        const tokenBContractForApproval = new ethers.Contract(tokenB_Address, ERC20_ABI, wallet);
-        const allowanceB = await tokenBContractForApproval.allowance(wallet.address, ROUTER_ADDRESS);
-        let approveBSuccess = true;
-        if (allowanceB < amountToSwap_B_Dynamic) {
-            logger.info(`  [${timestamp()}] Approval diperlukan untuk ${tokenB_Name}.`);
-            approveBSuccess = await addTransactionToQueue(
-                (nonce) => approveToken(tokenB_Address, amountToSwap_B_Dynamic, nonce),
-                `${pairName} Siklus ${cycleNumber} - Approve ${tokenB_Name}`
+        if (currentBalanceA < amountToSwap_A_Fixed) {
+            logger.warn(`  [${timestamp()}] Saldo ${tokenA_Name} (${ethers.formatUnits(currentBalanceA, 18)}) tidak cukup untuk swap A->B. Melewati siklus ${cycle}.`);
+            overallFailureCycles++;
+            if (cycle < totalCycles) {
+                const delaySeconds = Math.floor(Math.random() * (10 - 5 + 1)) + 5;
+                logger.progress(`  [${timestamp()}] Menunggu ${delaySeconds} detik sebelum siklus berikutnya...`);
+                await delay(delaySeconds * 1000);
+            }
+            continue; 
+        }
+        
+        logger.info(`  Langkah 1: ${tokenA_Name} ➯ ${tokenB_Name}`);
+        const tokenAContractForApproval = new ethers.Contract(tokenA_Address, ERC20_ABI, wallet);
+        const allowanceA = await tokenAContractForApproval.allowance(wallet.address, ROUTER_ADDRESS);
+        let approveASuccess = true;
+        if (allowanceA < amountToSwap_A_Fixed) {
+            logger.info(`  [${timestamp()}] Approval diperlukan untuk ${tokenA_Name}.`);
+            approveASuccess = await addTransactionToQueue(
+                (nonce) => approveToken(tokenA_Address, amountToSwap_A_Fixed, nonce),
+                `${pairName} Siklus ${cycle} - Approve ${tokenA_Name}`
             );
-            if (approveBSuccess) await delay(3000);
+            if (approveASuccess) await delay(3000);
         } else {
-            logger.info(`  [${timestamp()}] Approval sudah ada untuk ${tokenB_Name}.`);
+            logger.info(`  [${timestamp()}] Approval sudah ada untuk ${tokenA_Name}.`);
         }
 
-        if (approveBSuccess) {
-            const swapBtoA_Success = await addTransactionToQueue(
-                (nonce) => swapAuto(`${tokenB_Name.toLowerCase()}To${tokenA_Name.toLowerCase()}`, amountToSwap_B_Dynamic, nonce),
-                `${pairName} Siklus ${cycleNumber} - Swap ${tokenB_Name} ➯ ${tokenA_Name}`
+        let swapAtoB_Success = false;
+        if (approveASuccess) {
+            swapAtoB_Success = await addTransactionToQueue(
+                (nonce) => swapAuto(`${tokenA_Name.toLowerCase()}To${tokenB_Name.toLowerCase()}`, amountToSwap_A_Fixed, nonce),
+                `${pairName} Siklus ${cycle} - Swap ${tokenA_Name} ➯ ${tokenB_Name}`
             );
-            if (swapBtoA_Success) {
-                logger.success(`    Siklus ${cycleNumber} ${pairName} bolak-balik berhasil!`);
-                cycleFullySuccessful = true;
+        }
+
+        if (!swapAtoB_Success) {
+            logger.error(`    Swap ${tokenA_Name} ➯ ${tokenB_Name} pada siklus ${cycle} gagal.`);
+            overallFailureCycles++;
+            if (cycle < totalCycles) {
+                const delaySeconds = Math.floor(Math.random() * (10 - 5 + 1)) + 5;
+                logger.progress(`  [${timestamp()}] Menunggu ${delaySeconds} detik sebelum siklus berikutnya...`);
+                await delay(delaySeconds * 1000);
+            }
+            continue; 
+        }
+
+        await delay(10000); 
+        
+        const tokenBContractProvider = new ethers.Contract(tokenB_Address, ERC20_ABI, provider);
+        const amountToSwap_B_Dynamic = await tokenBContractProvider.balanceOf(wallet.address);
+
+        if (amountToSwap_B_Dynamic > 0n) {
+            logger.info(`  Langkah 2: ${tokenB_Name} ➯ ${tokenA_Name} (Swap semua ${ethers.formatUnits(amountToSwap_B_Dynamic, 18)} ${tokenB_Name})`);
+            const tokenBContractForApproval = new ethers.Contract(tokenB_Address, ERC20_ABI, wallet);
+            const allowanceB = await tokenBContractForApproval.allowance(wallet.address, ROUTER_ADDRESS);
+            let approveBSuccess = true;
+            if (allowanceB < amountToSwap_B_Dynamic) {
+                logger.info(`  [${timestamp()}] Approval diperlukan untuk ${tokenB_Name}.`);
+                 approveBSuccess = await addTransactionToQueue(
+                    (nonce) => approveToken(tokenB_Address, amountToSwap_B_Dynamic, nonce),
+                    `${pairName} Siklus ${cycle} - Approve ${tokenB_Name}`
+                );
+                if (approveBSuccess) await delay(3000);
             } else {
-                logger.error(`    Swap ${tokenB_Name} ➯ ${tokenA_Name} pada siklus ${cycleNumber} gagal.`);
+                logger.info(`  [${timestamp()}] Approval sudah ada untuk ${tokenB_Name}.`);
+            }
+
+            let swapBtoA_Success = false;
+            if (approveBSuccess) {
+                swapBtoA_Success = await addTransactionToQueue(
+                    (nonce) => swapAuto(`${tokenB_Name.toLowerCase()}To${tokenA_Name.toLowerCase()}`, amountToSwap_B_Dynamic, nonce),
+                    `${pairName} Siklus ${cycle} - Swap ${tokenB_Name} ➯ ${tokenA_Name}`
+                );
+            }
+
+            if (swapBtoA_Success) {
+                logger.success(`    Siklus ${cycle} ${pairName} bolak-balik berhasil!`);
+                overallSuccessCycles++;
+            } else {
+                logger.error(`    Swap ${tokenB_Name} ➯ ${tokenA_Name} pada siklus ${cycle} gagal.`);
+                overallFailureCycles++;
             }
         } else {
-            logger.warn(`  [${timestamp()}] Approval untuk ${tokenB_Name} gagal, swap B->A dilewati.`);
+            logger.warn(`  [${timestamp()}] Saldo ${tokenB_Name} adalah 0 setelah swap A->B. Tidak ada yang diswap kembali untuk siklus ${cycle}.`);
+            overallFailureCycles++; // Atau anggap siklus tidak lengkap tapi tidak gagal total
         }
-    } else {
-        logger.warn(`  [${timestamp()}] Saldo ${tokenB_Name} adalah 0 setelah swap A->B. Tidak ada yang diswap kembali.`);
+
+        if (cycle < totalCycles) {
+            const delaySeconds = Math.floor(Math.random() * (10 - 5 + 1)) + 5;
+            logger.progress(`  [${timestamp()}] Menunggu ${delaySeconds} detik sebelum siklus berikutnya...`);
+            await delay(delaySeconds * 1000);
+        }
     }
-    return cycleFullySuccessful;
+    logger.info(`[${timestamp()}] Sequence Swap Bolak-Balik ${pairName} Selesai. Siklus Sukses: ${overallSuccessCycles}, Siklus Gagal/Tidak Lengkap: ${overallFailureCycles}`);
 }
 
-// =========================================================================
-// FUNGSI MAIN (NON-TUI) - DENGAN PERBAIKAN TYPO DAN PARAMETER
-// =========================================================================
+
 async function main() {
     console.log("=============================================");
     console.log("     0G LABS AUTO SWAP BOT (Konsol)     ");
@@ -267,7 +306,7 @@ async function main() {
         const MIN_USDT_BALANCE = ethers.parseUnits("100", 18); 
         const MIN_ETH_BALANCE = ethers.parseUnits("0.02", 18);  
         const MIN_BTC_BALANCE = ethers.parseUnits("0.002", 18); 
-        const MIN_AOGI_BALANCE_FOR_GAS = ethers.parseUnits("0.02", 18);
+        const MIN_AOGI_BALANCE_FOR_GAS = ethers.parseUnits("0.00002", 18);
 
         logger.info(`[${timestamp()}] Memulai Bot... Network: ${NETWORK_NAME}`);
         let balances = await updateWalletData();
@@ -299,15 +338,15 @@ async function main() {
             const ethBalForReplenish = await (new ethers.Contract(ETH_ADDRESS, ERC20_ABI, provider)).balanceOf(wallet.address);
             if (ethBalForReplenish >= ETH_SWAP_AMOUNT_FIXED) {
                 logger.info("  Mencoba swap ETH ke USDT untuk pengisian...");
-                await addTransactionToQueue( (nonce) => approveToken(ETH_ADDRESS, ETH_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve ETH" );
-                await delay(3000);
+                await addTransactionToQueue( (nonce) => approveToken(ETH_ADDRESS, ETH_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve ETH (untuk USDT)" );
+                if(nextNonce !== null) await delay(3000); // Delay only if approve actually happened and queue advanced
                 await addTransactionToQueue( (nonce) => swapAuto("ethToUsdt", ETH_SWAP_AMOUNT_FIXED, nonce), "Pengisian - ETH ke USDT" );
             } else {
                 const btcBalForReplenish = await (new ethers.Contract(BTC_ADDRESS, ERC20_ABI, provider)).balanceOf(wallet.address);
                 if (btcBalForReplenish >= BTC_SWAP_AMOUNT_FIXED) {
                     logger.info("  Mencoba swap BTC ke USDT untuk pengisian...");
                     await addTransactionToQueue( (nonce) => approveToken(BTC_ADDRESS, BTC_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve BTC (untuk USDT)" );
-                    await delay(3000);
+                    if(nextNonce !== null) await delay(3000);
                     await addTransactionToQueue( (nonce) => swapAuto("btcToUsdt", BTC_SWAP_AMOUNT_FIXED, nonce), "Pengisian - BTC ke USDT" );
                 } else { 
                     logger.warn("  Tidak cukup ETH atau BTC untuk mengisi USDT."); 
@@ -321,14 +360,14 @@ async function main() {
             logger.warn(`[${timestamp()}] Saldo ETH (${ethers.formatUnits(balances.balanceETH,18)}) rendah. Mencoba mengisi...`);
             if (balances.balanceUSDT >= USDT_SWAP_AMOUNT_FIXED) {
                  await addTransactionToQueue( (nonce) => approveToken(USDT_ADDRESS, USDT_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve USDT (untuk ETH)" );
-                 await delay(3000);
+                 if(nextNonce !== null) await delay(3000);
                  await addTransactionToQueue( (nonce) => swapAuto("usdtToEth", USDT_SWAP_AMOUNT_FIXED, nonce), "Pengisian - USDT ke ETH" );
             } else { 
                 const btcBalForReplenish = await (new ethers.Contract(BTC_ADDRESS, ERC20_ABI, provider)).balanceOf(wallet.address);
                 if (btcBalForReplenish >= BTC_SWAP_AMOUNT_FIXED) {
                     logger.info("  Mencoba swap BTC ke ETH untuk pengisian...");
                     await addTransactionToQueue( (nonce) => approveToken(BTC_ADDRESS, BTC_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve BTC (untuk ETH)" );
-                    await delay(3000);
+                    if(nextNonce !== null) await delay(3000);
                     await addTransactionToQueue( (nonce) => swapAuto("btcToEth", BTC_SWAP_AMOUNT_FIXED, nonce), "Pengisian - BTC ke ETH" );
                 } else {
                     logger.warn("  Tidak cukup USDT atau BTC untuk mengisi ETH.");
@@ -342,14 +381,14 @@ async function main() {
             logger.warn(`[${timestamp()}] Saldo BTC (${ethers.formatUnits(balances.balanceBTC,18)}) rendah. Mencoba mengisi...`);
             if (balances.balanceUSDT >= USDT_SWAP_AMOUNT_FIXED) {
                  await addTransactionToQueue( (nonce) => approveToken(USDT_ADDRESS, USDT_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve USDT (untuk BTC)" );
-                 await delay(3000);
+                 if(nextNonce !== null) await delay(3000);
                  await addTransactionToQueue( (nonce) => swapAuto("usdtToBtc", USDT_SWAP_AMOUNT_FIXED, nonce), "Pengisian - USDT ke BTC" );
             } else {
                 const ethBalForReplenish = await (new ethers.Contract(ETH_ADDRESS, ERC20_ABI, provider)).balanceOf(wallet.address);
                 if (ethBalForReplenish >= ETH_SWAP_AMOUNT_FIXED) {
                     logger.info("  Mencoba swap ETH ke BTC untuk pengisian...");
                     await addTransactionToQueue( (nonce) => approveToken(ETH_ADDRESS, ETH_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve ETH (untuk BTC)" );
-                    await delay(3000);
+                    if(nextNonce !== null) await delay(3000);
                     await addTransactionToQueue( (nonce) => swapAuto("ethToBtc", ETH_SWAP_AMOUNT_FIXED, nonce), "Pengisian - ETH ke BTC" );
                 } else {
                      logger.warn("  Tidak cukup USDT atau ETH untuk mengisi BTC.");
@@ -362,12 +401,6 @@ async function main() {
         await updateWalletData(true); 
 
         logger.step("Memulai Fase Swap Rutin Bolak-Balik");
-
-        // Parameter untuk runSwapCycle:
-        // pairName, 
-        // tokenA_Address, tokenA_Name, amountToSwap_A_Fixed, 
-        // tokenB_Address, tokenB_Name, 
-        // totalCycles
 
         await runSwapCycle("USDT & ETH", 
             USDT_ADDRESS, "USDT", USDT_SWAP_AMOUNT_FIXED, 
