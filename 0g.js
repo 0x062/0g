@@ -25,8 +25,8 @@ const logger = {
     error: (msg) => console.log(`${colors.red}[✗] ${msg}${colors.reset}`),
     progress: (msg) => console.log(`${colors.cyan}[⏳] ${msg}${colors.reset}`),
     step: (msg) => console.log(`\n${colors.white}--- ${msg} ---${colors.reset}`),
+    success: (msg) => console.log(`${colors.green}[✔] ${msg}${colors.reset}`), // <-- TAMBAHKAN BARIS INI
 };
-
 const ERC20_ABI = [
     { name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "_spender", type: "address" }, { name: "_value", type: "uint256" }], outputs: [{ name: "", type: "bool" }] },
     { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "_owner", type: "address" }], outputs: [{ name: "balance", type: "uint256" }] },
@@ -305,7 +305,7 @@ async function main() {
 
         const MIN_USDT_BALANCE = ethers.parseUnits("100", 18); 
         const MIN_ETH_BALANCE = ethers.parseUnits("0.02", 18);  
-        const MIN_BTC_BALANCE = ethers.parseUnits("0.002", 18); 
+        const MIN_BTC_BALANCE = ethers.parseUnits("0.000002", 18); 
         const MIN_AOGI_BALANCE_FOR_GAS = ethers.parseUnits("0.00002", 18);
 
         logger.info(`[${timestamp()}] Memulai Bot... Network: ${NETWORK_NAME}`);
