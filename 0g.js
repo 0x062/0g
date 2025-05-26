@@ -241,25 +241,44 @@ async function runSwapCycle(
             continue; 
         }
 
-        await delay(10000); 
+        // ... setelah swap A->B berhasil ...
+        await delay(10000); // Jeda agar saldo terupdate di RPC (bisa disesuaikan)
         
         const tokenBContractProvider = new ethers.Contract(tokenB_Address, ERC20_ABI, provider);
-        const amountToSwap_B_Dynamic = await tokenBContractProvider.balanceOf(wallet.address);
+        const currentBalanceOfTokenB = await tokenBContractProvider.balanceOf(wallet.address);
 
+        let minBalanceToKeepForTokenB = 0n;
+        if (tokenB_Address.toLowerCase() === ETH_ADDRESS.toLowerCase()) {
+            minBalanceToKeepForTokenB = MIN_ETH_BALANCE;
+        } else if (tokenB_Address.toLowerCase() === BTC_ADDRESS.toLowerCase()) {
+            minBalanceToKeepForTokenB = MIN_BTC_BALANCE;
+        } else if (tokenB_Address.toLowerCase() === USDT_ADDRESS.toLowerCase()) {
+            minBalanceToKeepForTokenB = MIN_USDT_BALANCE; 
+        }
+        // Tambahkan token lain jika ada
+
+        let amountToSwap_B_Dynamic = 0n;
+        if (currentBalanceOfTokenB > minBalanceToKeepForTokenB) {
+            amountToSwap_B_Dynamic = currentBalanceOfTokenB - minBalanceToKeepForTokenB;
+        }
+
+        // Tambahkan pengecekan apakah jumlah yang akan diswap signifikan (misal lebih dari sekian wei)
+        // Untuk sekarang, kita hanya cek > 0
         if (amountToSwap_B_Dynamic > 0n) {
-            logger.info(`  Langkah 2: ${tokenB_Name} ➯ ${tokenA_Name} (Swap semua ${ethers.formatUnits(amountToSwap_B_Dynamic, 18)} ${tokenB_Name})`);
+            logger.info(`  Langkah 2: ${tokenB_Name} ➯ ${tokenA_Name} (Swap ${ethers.formatUnits(amountToSwap_B_Dynamic, 18)} ${tokenB_Name}, sisakan ~${ethers.formatUnits(minBalanceToKeepForTokenB, 18)} ${tokenB_Name})`);
+            
             const tokenBContractForApproval = new ethers.Contract(tokenB_Address, ERC20_ABI, wallet);
             const allowanceB = await tokenBContractForApproval.allowance(wallet.address, ROUTER_ADDRESS);
             let approveBSuccess = true;
             if (allowanceB < amountToSwap_B_Dynamic) {
-                logger.info(`  [${timestamp()}] Approval diperlukan untuk ${tokenB_Name}.`);
+                logger.info(`  [${timestamp()}] Approval diperlukan untuk ${tokenB_Name} (sejumlah ${ethers.formatUnits(amountToSwap_B_Dynamic,18)}).`);
                  approveBSuccess = await addTransactionToQueue(
                     (nonce) => approveToken(tokenB_Address, amountToSwap_B_Dynamic, nonce),
-                    `${pairName} Siklus ${cycle} - Approve ${tokenB_Name}`
+                    `${pairName} Siklus ${cycle} - Approve ${tokenB_Name} (untuk B->A)`
                 );
                 if (approveBSuccess) await delay(3000);
             } else {
-                logger.info(`  [${timestamp()}] Approval sudah ada untuk ${tokenB_Name}.`);
+                logger.info(`  [${timestamp()}] Approval sudah ada untuk ${tokenB_Name} (sejumlah ${ethers.formatUnits(amountToSwap_B_Dynamic,18)}).`);
             }
 
             let swapBtoA_Success = false;
@@ -278,8 +297,10 @@ async function runSwapCycle(
                 overallFailureCycles++;
             }
         } else {
-            logger.warn(`  [${timestamp()}] Saldo ${tokenB_Name} adalah 0 setelah swap A->B. Tidak ada yang diswap kembali untuk siklus ${cycle}.`);
-            overallFailureCycles++; // Atau anggap siklus tidak lengkap tapi tidak gagal total
+            logger.warn(`  [${timestamp()}] Saldo ${tokenB_Name} (${ethers.formatUnits(currentBalanceOfTokenB,18)}) tidak cukup untuk diswap kembali setelah menyisakan minimum, atau sudah 0. Swap B->A dilewati untuk siklus ${cycle}.`);
+            // Jika tidak ada yang di-swap kembali, siklus ini mungkin tidak dianggap gagal total,
+            // tergantung definisi Anda. Untuk sekarang, kita biarkan overallFailureCycles tidak bertambah di sini.
+            // Atau, jika Anda anggap ini kegagalan siklus, tambahkan: overallFailureCycles++;
         }
 
         if (cycle < totalCycles) {
