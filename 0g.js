@@ -18,7 +18,7 @@ const SWAP_GAS_LIMIT = 150000;
 const MIN_USDT_BALANCE = ethers.parseUnits(process.env.MIN_USDT_BALANCE || "100", 18); 
 const MIN_ETH_BALANCE = ethers.parseUnits(process.env.MIN_ETH_BALANCE || "0.02", 18);  
 const MIN_BTC_BALANCE = ethers.parseUnits(process.env.MIN_BTC_BALANCE || "0.0012", 18); 
-const MIN_AOGI_BALANCE_FOR_GAS = ethers.parseUnits(process.env.MIN_AOGI_BALANCE_FOR_GAS || "0.02", 18);
+const MIN_AOGI_BALANCE_FOR_GAS = ethers.parseUnits(process.env.MIN_AOGI_BALANCE_FOR_GAS || "0.000002", 18);
 
 // =========================================================================
 // SETUP ETHERS & WALLET
@@ -344,8 +344,13 @@ async function main() {
         const BTC_SWAP_AMOUNT_FIXED = ethers.parseUnits(process.env.BTC_SWAP_AMOUNT || "0.001", 18); 
 
         logger.info(`[${timestamp()}] Memulai Bot... Network: ${NETWORK_NAME}`);
-        let balances = await updateWalletData();
-        if (!balances) throw new Error("Gagal memuat saldo awal.");
+        let balances = await updateWalletData(); // Log penuh di awal
+        if (!balances) {
+            const errMessage = "Gagal memuat saldo awal karena masalah RPC. Bot tidak bisa melanjutkan.";
+            logger.error(`[${timestamp()}] ${errMessage}`);
+            await sendTelegramNotification(`🚨 BOT ERROR 🚨\n${errMessage}`);
+            process.exit(1);
+        }
 
         if (balances.balanceNative < MIN_AOGI_BALANCE_FOR_GAS) {
             const errMessage = `[${timestamp()}] Saldo AOGI (${ethers.formatEther(balances.balanceNative)}) tidak cukup untuk gas (Min: ${ethers.formatEther(MIN_AOGI_BALANCE_FOR_GAS)}). Bot berhenti.`;
@@ -369,22 +374,24 @@ async function main() {
         if (!selectedGasOptions.maxFeePerGas && !selectedGasOptions.gasPrice) throw new Error("Gagal menetapkan opsi gas.");
 
         logger.step("Memulai Fase Pemeriksaan & Pengisian Saldo Kritis (jika perlu)");
+        
+        // Panggil updateWalletData sekali di awal fase pengisian
         balances = await updateWalletData(false); 
-        if (balances.balanceUSDT <= MIN_USDT_BALANCE) {
-            logger.warn(`[${timestamp()}] Saldo USDT (${ethers.formatUnits(balances.balanceUSDT,18)}) rendah atau pas minimum. Mencoba mengisi...`);
-            const ethContract = new ethers.Contract(ETH_ADDRESS, ERC20_ABI, provider);
-            const ethBalForReplenish = await ethContract.balanceOf(wallet.address);
-            if (ethBalForReplenish > (MIN_ETH_BALANCE + ETH_SWAP_AMOUNT_FIXED)) {
-                logger.info("  Mencoba swap ETH ke USDT untuk pengisian...");
-                let approved = await addTransactionToQueue( (nonce) => approveToken(ETH_ADDRESS, ETH_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve ETH (untuk USDT)" );
-                if(approved) { 
-                    if(nextNonce !== null) await delay(3000);
-                    await addTransactionToQueue( (nonce) => swapAuto("ethToUsdt", ETH_SWAP_AMOUNT_FIXED, nonce), "Pengisian - ETH ke USDT" );
-                }
-            } else {
-                const btcContract = new ethers.Contract(BTC_ADDRESS, ERC20_ABI, provider);
-                const btcBalForReplenish = await btcContract.balanceOf(wallet.address);
-                if (btcBalForReplenish > (MIN_BTC_BALANCE + BTC_SWAP_AMOUNT_FIXED)) { 
+        if (!balances) {
+            logger.error("[${timestamp()}] Gagal mendapatkan data saldo untuk fase pengisian. Melewati fase ini.");
+            await sendTelegramNotification("🚨 Peringatan Bot 0G: Gagal memuat data saldo untuk fase pengisian awal.");
+        } else {
+            // Replenish USDT
+            if (balances.balanceUSDT <= MIN_USDT_BALANCE) {
+                logger.warn(`[${timestamp()}] Saldo USDT (${ethers.formatUnits(balances.balanceUSDT,18)}) rendah atau pas minimum. Mencoba mengisi...`);
+                if (balances.balanceETH > (MIN_ETH_BALANCE + ETH_SWAP_AMOUNT_FIXED)) {
+                    logger.info("  Mencoba swap ETH ke USDT untuk pengisian...");
+                    let approved = await addTransactionToQueue( (nonce) => approveToken(ETH_ADDRESS, ETH_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve ETH (untuk USDT)" );
+                    if(approved) { 
+                        if(nextNonce !== null) await delay(3000);
+                        await addTransactionToQueue( (nonce) => swapAuto("ethToUsdt", ETH_SWAP_AMOUNT_FIXED, nonce), "Pengisian - ETH ke USDT" );
+                    }
+                } else if (balances.balanceBTC > (MIN_BTC_BALANCE + BTC_SWAP_AMOUNT_FIXED)) { 
                     logger.info("  Mencoba swap BTC ke USDT untuk pengisian...");
                     let approved = await addTransactionToQueue( (nonce) => approveToken(BTC_ADDRESS, BTC_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve BTC (untuk USDT)" );
                     if(approved) {
@@ -395,60 +402,54 @@ async function main() {
                     logger.warn("  Tidak cukup surplus ETH atau BTC untuk mengisi USDT."); 
                 }
             }
-        }
-        await transactionQueue; 
-        balances = await updateWalletData(false); 
-
-        if (balances.balanceETH <= MIN_ETH_BALANCE) {
-            logger.warn(`[${timestamp()}] Saldo ETH (${ethers.formatUnits(balances.balanceETH,18)}) rendah atau pas minimum. Mencoba mengisi...`);
-            const usdtContract = new ethers.Contract(USDT_ADDRESS, ERC20_ABI, provider);
-            const usdtBalForReplenish = await usdtContract.balanceOf(wallet.address);
-            if (usdtBalForReplenish > (MIN_USDT_BALANCE + USDT_SWAP_AMOUNT_FIXED)) {
-                 let approved = await addTransactionToQueue( (nonce) => approveToken(USDT_ADDRESS, USDT_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve USDT (untuk ETH)" );
-                 if(approved) {
-                    if(nextNonce !== null) await delay(3000);
-                    await addTransactionToQueue( (nonce) => swapAuto("usdtToEth", USDT_SWAP_AMOUNT_FIXED, nonce), "Pengisian - USDT ke ETH" );
-                 }
-            } else { 
-                const btcContract = new ethers.Contract(BTC_ADDRESS, ERC20_ABI, provider);
-                const btcBalForReplenish = await btcContract.balanceOf(wallet.address);
-                if (btcBalForReplenish > (MIN_BTC_BALANCE + BTC_SWAP_AMOUNT_FIXED)) {
-                    logger.info("  Mencoba swap BTC ke ETH untuk pengisian...");
-                    let approved = await addTransactionToQueue( (nonce) => approveToken(BTC_ADDRESS, BTC_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve BTC (untuk ETH)" );
-                    if(approved) {
-                        if(nextNonce !== null) await delay(3000);
-                        await addTransactionToQueue( (nonce) => swapAuto("btcToEth", BTC_SWAP_AMOUNT_FIXED, nonce), "Pengisian - BTC ke ETH" );
+            await transactionQueue; 
+            balances = await updateWalletData(false); // Update lagi setelah potensi pengisian USDT
+            if (!balances) { /* ... handle error seperti di atas ...*/ }
+            else { // Lanjutkan jika balances valid
+                // Replenish ETH
+                if (balances.balanceETH <= MIN_ETH_BALANCE) {
+                    logger.warn(`[${timestamp()}] Saldo ETH (${ethers.formatUnits(balances.balanceETH,18)}) rendah atau pas minimum. Mencoba mengisi...`);
+                    if (balances.balanceUSDT > (MIN_USDT_BALANCE + USDT_SWAP_AMOUNT_FIXED)) {
+                         let approved = await addTransactionToQueue( (nonce) => approveToken(USDT_ADDRESS, USDT_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve USDT (untuk ETH)" );
+                         if(approved) {
+                            if(nextNonce !== null) await delay(3000);
+                            await addTransactionToQueue( (nonce) => swapAuto("usdtToEth", USDT_SWAP_AMOUNT_FIXED, nonce), "Pengisian - USDT ke ETH" );
+                         }
+                    } else if (balances.balanceBTC > (MIN_BTC_BALANCE + BTC_SWAP_AMOUNT_FIXED)) { 
+                        logger.info("  Mencoba swap BTC ke ETH untuk pengisian...");
+                        let approved = await addTransactionToQueue( (nonce) => approveToken(BTC_ADDRESS, BTC_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve BTC (untuk ETH)" );
+                        if(approved) {
+                            if(nextNonce !== null) await delay(3000);
+                            await addTransactionToQueue( (nonce) => swapAuto("btcToEth", BTC_SWAP_AMOUNT_FIXED, nonce), "Pengisian - BTC ke ETH" );
+                        }
+                    } else {
+                        logger.warn("  Tidak cukup surplus USDT atau BTC untuk mengisi ETH.");
                     }
-                } else {
-                    logger.warn("  Tidak cukup surplus USDT atau BTC untuk mengisi ETH.");
                 }
-            }
-        }
-        await transactionQueue;
-        balances = await updateWalletData(false);
-
-        if (balances.balanceBTC <= MIN_BTC_BALANCE) {
-            logger.warn(`[${timestamp()}] Saldo BTC (${ethers.formatUnits(balances.balanceBTC,18)}) rendah atau pas minimum. Mencoba mengisi...`);
-            const usdtContract = new ethers.Contract(USDT_ADDRESS, ERC20_ABI, provider);
-            const usdtBalForReplenish = await usdtContract.balanceOf(wallet.address);
-            if (usdtBalForReplenish > (MIN_USDT_BALANCE + USDT_SWAP_AMOUNT_FIXED)) {
-                 let approved = await addTransactionToQueue( (nonce) => approveToken(USDT_ADDRESS, USDT_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve USDT (untuk BTC)" );
-                 if(approved) {
-                    if(nextNonce !== null) await delay(3000);
-                    await addTransactionToQueue( (nonce) => swapAuto("usdtToBtc", USDT_SWAP_AMOUNT_FIXED, nonce), "Pengisian - USDT ke BTC" );
-                 }
-            } else {
-                const ethContract = new ethers.Contract(ETH_ADDRESS, ERC20_ABI, provider);
-                const ethBalForReplenish = await ethContract.balanceOf(wallet.address);
-                if (ethBalForReplenish > (MIN_ETH_BALANCE + ETH_SWAP_AMOUNT_FIXED)) {
-                    logger.info("  Mencoba swap ETH ke BTC untuk pengisian...");
-                    let approved = await addTransactionToQueue( (nonce) => approveToken(ETH_ADDRESS, ETH_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve ETH (untuk BTC)" );
-                    if(approved) {
-                        if(nextNonce !== null) await delay(3000);
-                        await addTransactionToQueue( (nonce) => swapAuto("ethToBtc", ETH_SWAP_AMOUNT_FIXED, nonce), "Pengisian - ETH ke BTC" );
+                await transactionQueue;
+                balances = await updateWalletData(false); // Update lagi
+                if (!balances) { /* ... handle error ...*/ }
+                else { // Lanjutkan jika balances valid
+                    // Replenish BTC
+                    if (balances.balanceBTC <= MIN_BTC_BALANCE) {
+                        logger.warn(`[${timestamp()}] Saldo BTC (${ethers.formatUnits(balances.balanceBTC,18)}) rendah atau pas minimum. Mencoba mengisi...`);
+                        if (balances.balanceUSDT > (MIN_USDT_BALANCE + USDT_SWAP_AMOUNT_FIXED)) {
+                             let approved = await addTransactionToQueue( (nonce) => approveToken(USDT_ADDRESS, USDT_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve USDT (untuk BTC)" );
+                             if(approved) {
+                                if(nextNonce !== null) await delay(3000);
+                                await addTransactionToQueue( (nonce) => swapAuto("usdtToBtc", USDT_SWAP_AMOUNT_FIXED, nonce), "Pengisian - USDT ke BTC" );
+                             }
+                        } else if (balances.balanceETH > (MIN_ETH_BALANCE + ETH_SWAP_AMOUNT_FIXED)) {
+                            logger.info("  Mencoba swap ETH ke BTC untuk pengisian...");
+                            let approved = await addTransactionToQueue( (nonce) => approveToken(ETH_ADDRESS, ETH_SWAP_AMOUNT_FIXED, nonce), "Pengisian - Approve ETH (untuk BTC)" );
+                            if(approved) {
+                                if(nextNonce !== null) await delay(3000);
+                                await addTransactionToQueue( (nonce) => swapAuto("ethToBtc", ETH_SWAP_AMOUNT_FIXED, nonce), "Pengisian - ETH ke BTC" );
+                            }
+                        } else {
+                             logger.warn("  Tidak cukup surplus USDT atau ETH untuk mengisi BTC.");
+                        }
                     }
-                } else {
-                     logger.warn("  Tidak cukup surplus USDT atau ETH untuk mengisi BTC.");
                 }
             }
         }
@@ -478,7 +479,7 @@ async function main() {
         result = await runSwapCycle("BTC & ETH", BTC_ADDRESS, "BTC", BTC_SWAP_AMOUNT_FIXED, ETH_ADDRESS, "ETH", CYCLES_PER_PAIR);
         if(result) { totalCyclesSuccess += result.success; totalCyclesFailed += result.failure; }
         overallSummary += `BTC<>ETH: ${result?.success || 0} siklus sukses, ${result?.failure || 0} gagal/tdk lengkap.\n`;
-        await updateWalletData(); 
+        const balancesAfterRoutine = await updateWalletData(); // Update saldo terakhir sebelum final summary
 
         logger.info(`[${timestamp()}] Semua sequence swap telah selesai ditambahkan ke antrean.`);
         logger.progress(`[${timestamp()}] Menunggu semua transaksi di antrean selesai...`);
@@ -491,11 +492,11 @@ async function main() {
              finalNonceCheck = await provider.getTransactionCount(wallet.address, "pending");
         }
         
-        const finalBalances = await updateWalletData(true);
+        const finalBalances = await updateWalletData(true); // Log saldo akhir secara penuh
         if (finalBalances && finalBalances.reportString) {
-            overallSummary += "\nSaldo Akhir:\n" + finalBalances.reportString + "\n\n";
+            overallSummary += "\nSaldo Akhir Aktual:\n" + finalBalances.reportString + "\n\n";
         } else {
-            overallSummary += "\nSaldo Akhir: Gagal mengambil data saldo.\n\n";
+            overallSummary += "\nSaldo Akhir Aktual: Gagal mengambil data saldo.\n\n";
         }
         overallSummary += `Total Siklus Sukses (gabungan): ${totalCyclesSuccess}\nTotal Siklus Gagal/Tdk Lengkap (gabungan): ${totalCyclesFailed}\n`;
         overallSummary += "✨ SEMUA OPERASI SELESAI! ✨";
@@ -508,7 +509,7 @@ async function main() {
     } catch (error) {
         const errorMessage = `[${timestamp()}] Terjadi error fatal di main: ${error.message}`;
         logger.error(errorMessage);
-        console.error(error);
+        console.error(error); // Tetap log error detail ke konsol
         await sendTelegramNotification(`🚨 *ERROR FATAL BOT 0G* 🚨\n\n${errorMessage}\n\nCek log konsol untuk detail.`);
         process.exit(1);
     }
