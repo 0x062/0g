@@ -17,7 +17,7 @@ const SWAP_GAS_LIMIT = 150000;
 // --- KONSTANTA MINIMUM SALDO DIPINDAHKAN KE SINI (GLOBAL SCOPE) ---
 const MIN_USDT_BALANCE = ethers.parseUnits("100", 18); 
 const MIN_ETH_BALANCE = ethers.parseUnits("0.02", 18);  
-const MIN_BTC_BALANCE = ethers.parseUnits("0.000002", 18); 
+const MIN_BTC_BALANCE = ethers.parseUnits("0.0012", 18); 
 const MIN_AOGI_BALANCE_FOR_GAS = ethers.parseUnits("0.00002", 18);
 // --- AKHIR PEMINDAHAN ---
 
